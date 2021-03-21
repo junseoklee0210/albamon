@@ -13,20 +13,19 @@ class AlbamonItem(scrapy.Item):
     aa00 = scrapy.Field() # 구직광고 식별번호
     aa01 = scrapy.Field() # 등록일자
     aa02 = scrapy.Field() # 수집일자
-    aa03 = scrapy.Field() # 노출되는 제목
-    aa04 = scrapy.Field() # 관심 수
+    aa03 = scrapy.Field() # 노출되는 기업명
+    aa04 = scrapy.Field() # 노출되는 제목
 
     # 근무 장소 (ab)
     ab00 = scrapy.Field() # 근무장소 - 시군구까지만
     ab01 = scrapy.Field() # 근무장소 - 자세한 주소
+    ab02 = scrapy.Field() # 인근 지하철
+    ab03 = scrapy.Field() # 인근 대학
 
     # 기업 정보 (ac)
     ac00 = scrapy.Field() # 기업명
-    ac01 = scrapy.Field() # 회사 대표자
-    ac02 = scrapy.Field() # 사업내용
-    ac03 = scrapy.Field() # 홈페이지
-    ac04 = scrapy.Field() # 기업 로고 여부
-    ac05 = scrapy.Field() # 회사주소 (근무장소랑 다른 경우도 존재)
+    ac01 = scrapy.Field() # 근로계약서 작성약속
+    ac02 = scrapy.Field() # 성희롱 예방교육수료
 
     # 지원방법 (ad)
     ad00 = scrapy.Field() # 온라인지원 가능
@@ -349,7 +348,7 @@ class AlbamonItem(scrapy.Item):
     dl05 = scrapy.Field() # 택배·퀵서비스
     dl06 = scrapy.Field() # 배달
 
-    # 병원 & 간호 & 연구 (medical research -> mr)
+    # 병원 & 간호 & 연구 (meeical research -> mr)
     dm00 = scrapy.Field() # 간호조무사·간호사
     dm01 = scrapy.Field() # 간병·요양보호사
     dm02 = scrapy.Field() # 원무·코디네이터

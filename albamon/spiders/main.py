@@ -4,24 +4,27 @@ from  albamon.items import AlbamonItem
 from datetime import datetime
 from numpy import ceil
 from pandas import read_html, DataFrame
+from bs4 import BeautifulSoup
 
 class MainSpider(scrapy.Spider):
 
     name = 'main'
-    init_url = "https://www.albamon.com/list/gi/mon_gi_tot_list.asp?scd=&ps=50&sExcChk=y"
+    init_url = "https://www.albamon.com/list/gi/mon_gi_tot_list.asp?scd=&ps=10&sExcChk=y"
 
     def start_requests(self):
 
-        return [scrapy.Request(url=self.init_url, callback=self.check_page_nums)]
+        yield scrapy.Request(url=self.init_url, callback=self.check_page_nums)
 
     def check_page_nums(self, response):
 
-        pages_raw = response.css("#subcontent > form > div.pageSubTit > span > em::text").get()
-        pages = ceil(float(pages_raw.replace(",","")))
-        pages = 14
 
-        return [scrapy.Request(url=self.init_url+f"&page={p}", callback=self.scrape_urls)
-            for p in range(14, pages+1)]
+        pages_raw = response.css("#subcontent > form > div.pageSubTit > span > em::text").get()
+        pages = int(ceil(float(pages_raw.replace(",",""))/50))
+        pages = 2
+
+        for p in range(1, pages+1):
+
+            yield scrapy.Request(url=self.init_url+f'&page={p}', callback=self.scrape_urls)
 
     def scrape_urls(self, response):
 
@@ -42,7 +45,7 @@ class MainSpider(scrapy.Spider):
                 'workarea' : wa,
                 'paytype' : pt,
                 'payamount' : pa,
-                'worktime': wt
+                'worktime': wt,
             }
 
             yield scrapy.Request(url=u, callback=self.crawl, meta=meta)
@@ -50,28 +53,9 @@ class MainSpider(scrapy.Spider):
     def crawl(self, response):
 
         item = AlbamonItem()
-        item['aa00'] = response.meta['num']
-        item['ab00'] = response.meta['workarea']
-        if response.meta['paytype'] == '시급':
-            item['ca01'] = 0
-        elif response.meta['paytype'] == '일급':
-            item['ca01'] = 1
-        elif response.meta['paytype'] == '주급':
-            item['ca01'] = 2
-        elif response.meta['paytype'] == '월급':
-            item['ca01'] = 3
-        elif response.meta['paytype'] == '연봉':
-            item['ca01'] = 4
-        elif response.meta['paytype'] == '건별':
-            item['ca01'] = 5
-        item['ca00'] = response.meta['payamount']
-        item['cd00'] = 1 * (response.meta['worktime'] == '시간협의')
-        if '~' in response.meta['worktime']:
-            wtbegin, wtend = response.meta['worktime'].split('~')
-            item['cd01'] = wtbegin
-            item['cd02'] = wtend
-
         css_main = "#allcontent > div.viewContent.viewRecruitType > "
+
+        item['aa00'] = response.meta['num'] # 게시글 고유번호
 
         # 등록일자
         css_regist_time = css_main + "div.registInfo.clearfix.devHidePrint > div.regDate > div > span::text"
@@ -83,21 +67,49 @@ class MainSpider(scrapy.Spider):
         d = datetime.now().day
         h = datetime.now().hour
         n = datetime.now().minute
-        s = datetime.now().second
         date = f"{y}-{str(0)*(2-len(str(m)))}{m}-{str(0)*(2-len(str(d)))}{d}"
-        time = f" {str(0)*(2-len(str(h)))}{h}:{str(0)*(2-len(str(n)))}{n}:{str(0)*(2-len(str(s)))}{s}"
+        time = f" {str(0)*(2-len(str(h)))}{h}:{str(0)*(2-len(str(n)))}{n}"
         item['aa02'] = date+time
 
-        # 맨 처음 노출되는 기업명
-        css_first_appeared = "div.viewTypeFullWidth > div.companyInfo.infoBox > div.recruitInfo > "
-        css_firmname = css_main + css_first_appeared + "div.company > span::text"
-        css_title = css_main + css_first_appeared + "h1::text"
-        item['aa03'] = response.css(css_title).get()
-        item['ac00'] = response.css(css_firmname).get()
+        # 맨 처음 노출되는 기업명 & 게시물 제목
+        css_recruitInfo = "div.viewTypeFullWidth > div.companyInfo.infoBox > div.recruitInfo > "
 
-        # logo 있는지 여부
-        css_logo = css_first_appeared + "div.companyLogo"
-        item['ac04'] = len(response.css(css_logo).extract()) # logo 있으면 1, 없으면 0
+        css_company = css_main + css_recruitInfo + "div.company > span::text"
+        company = response.css(css_company).extract()
+        item['aa03'] = company[0] # 기업이름
+
+        css_title = css_main + css_recruitInfo + "h1::text"
+        item['aa04'] = response.css(css_title).get() # 게시물 제목
+
+
+        # 근무장소 세부사항
+        css_workarea = css_main + "div.viweTab > div.tabItem_workArea > div.workAddr > span::text"
+
+        item['ab00'] = response.meta['workarea'] # 근무장소 간단히 (시군구)
+        item['ab01'] = response.css(css_workarea).get() # 근무장소 자세히 (좌표 변환 가능)
+
+        css_near = "div.viweTab > div.tabItem_workArea > div.mapInfo > div > ul > li"
+        near = response.css(css_near).extract()
+        subway = ""
+        college = ""
+        for html in near:
+            s = BeautifulSoup(html, 'lxml')
+            if s.select_one('span.mapItemTitle').text == '인근지하철':
+                subnums = [x['href'][x['href'].index("CodSubway=")+10:] for x in s.select('div > a')]
+                times = [x.text[x.text.index("도보")+3:x.text.index("분")] for x in s.select('span.areaSummary')]
+                for subnum, time in zip(subnums, times):
+                    subway += subnum + "_" + time + " "
+            elif s.select_one('span.mapItemTitle').text == '인근대학':
+                college = s.select_one("span.areaSummary").text
+        item['ab02'] = subway.strip()
+        item['ab03'] = college.strip()
+
+        # 기업정보
+        css_firmid = "#section_cropInfo > a::attr(href)"
+        firmid = response.css(css_firmid).get()
+        item['ac00'] = firmid[firmid.index("C_No=")+5:]
+        item['ac01'] = 1 * ('근로계약서 작성약속' in company)
+        item['ac02'] = 1 * ('성희롱 예방교육수료' in company)
 
         # 지원 방법
         css_regist_type = "div.viewTypeFullWidth > div.conditionInfo.verticalLine > " \
@@ -117,7 +129,8 @@ class MainSpider(scrapy.Spider):
         item['ad04'] = 1 * ('전화연락' in registtype)
         item['ad05'] = 1 * ('바로방문' in registtype)
 
-        # 모집 조건
+        # b. 모집 조건----------------------------------------------------------------------------
+
         css_recruit = "div.viewTypeFullWidth > div.conditionInfo.verticalLine > " \
         "div.column.column_620.infoBox > div.recruitCondition > div > table"
         html_recruit = str(response.css(css_recruit).get())
@@ -141,12 +154,6 @@ class MainSpider(scrapy.Spider):
         except:
             pass
 
-        # 표준화가 되어 있지 않아서 크게 쓸모가 없어 보임
-        try:
-            item['bf00'] = table_recruit.loc['모집분야',1]
-        except:
-            pass
-
         try:
             sex = table_recruit.loc['성별',1]
             if sex == '무관':
@@ -160,15 +167,15 @@ class MainSpider(scrapy.Spider):
 
         try:
             age = table_recruit.loc['연령',1]
-            item['bh01'] = 1 * ('주부가능' in age)
-            item['bh02'] = 1 * ('장년가능' in age)
-            item['bh03'] = 1 * ('청소년가능' in age)
             if '무관' in age:
                 item['bd00'] = 1
             elif '~' in age:
                 agemin, agemax = [int(s[s.index('년')-4:s.index('년')]) for s in age.split('~')]
                 item['bd01'] = agemin
                 item['bd02'] = agemax
+            item['bh01'] = 1 * ('주부가능' in age)
+            item['bh02'] = 1 * ('장년가능' in age)
+            item['bh03'] = 1 * ('청소년가능' in age) # 초보가능(bh00)은 뒤에 등장
         except:
             pass
 
@@ -188,6 +195,12 @@ class MainSpider(scrapy.Spider):
                 item['be00'] = 5
             elif '대학원' in eduraw:
                 item['be00'] = 6
+        except:
+            pass
+
+        # 표준화가 되어 있지 않아서 크게 쓸모가 없어 보임
+        try:
+            item['bf00'] = table_recruit.loc['모집분야',1]
         except:
             pass
 
@@ -213,6 +226,29 @@ class MainSpider(scrapy.Spider):
             item['bg17'] = 1 * ('장애인' in prefer)
         except:
             pass
+
+        # c.근무조건 --------------------------------------------------------
+
+        item['ca00'] = response.meta['payamount'] # 급여액
+
+        # 급여지급방식
+        if response.meta['paytype'] == '시급':
+            item['ca01'] = 0
+        elif response.meta['paytype'] == '일급':
+            item['ca01'] = 1
+        elif response.meta['paytype'] == '주급':
+            item['ca01'] = 2
+        elif response.meta['paytype'] == '월급':
+            item['ca01'] = 3
+        elif response.meta['paytype'] == '연봉':
+            item['ca01'] = 4
+        elif response.meta['paytype'] == '건별':
+            item['ca01'] = 5
+        item['cd00'] = 1 * (response.meta['worktime'] == '시간협의')
+        if '~' in response.meta['worktime']:
+            wtbegin, wtend = response.meta['worktime'].split('~')
+            item['cd01'] = wtbegin
+            item['cd02'] = wtend
 
         # 근무 조건
         css_recruit = "div.viewTypeFullWidth > div.conditionInfo.verticalLine > " \
@@ -282,6 +318,71 @@ class MainSpider(scrapy.Spider):
             item['cd04'] = wtdetail[wtdetail.index('휴게시간')+5:wtdetail.index('분')]
         except:
             pass
+
+        try:
+            emptype = table_recruit.loc['고용형태',1]
+            item['ce00'] = 1 * ('알바' in emptype)
+            item['ce01'] = 1 * ('정규직' in emptype)
+            item['ce02'] = 1 * ('계약직' in emptype)
+            item['ce03'] = 1 * ('파견직' in emptype)
+            item['ce04'] = 1 * ('청년인턴직' in emptype)
+            item['ce05'] = 1 * ('위촉직' in emptype)
+            item['ce06'] = 1 * ('연수생/교육생' in emptype)
+        except:
+            pass
+
+        try:
+            welfare = table_recruit.loc['복리후생',1]
+            # 보험 (wf_isr)
+            item['cf00'] = 1 * ('국민연금' in welfare)
+            item['cf01'] = 1 * ('고용보험' in welfare)
+            item['cf02'] = 1 * ('산재보험' in welfare)
+            item['cf03'] = 1 * ('건강보험' in welfare)
+
+            # 휴가, 휴무
+            item['cf04'] = 1 * ('정기휴가' in welfare)
+            item['cf05'] = 1 * ('연차' in welfare)
+            item['cf06'] = 1 * ('월차' in welfare)
+
+            # 보상제도
+            item['cf07'] = 1 * ('인센티브제' in welfare)
+            item['cf08'] = 1 * ('정기보너스' in welfare)
+            item['cf09'] = 1 * ('퇴직금' in welfare)
+            item['cf10'] = 1 * ('퇴직연금' in welfare)
+            item['cf11'] = 1 * ('우수사원 표창/포상' in welfare)
+            item['cf12'] = 1 * ('장기근속자 포상' in welfare)
+
+            # 수당제도
+            item['cf13'] = 1 * ('야간근로수당' in welfare)
+            item['cf14'] = 1 * ('휴일근로수당' in welfare)
+            item['cf15'] = 1 * ('연월차수당' in welfare)
+            item['cf16'] = 1 * ('장기근속수당' in welfare)
+            item['cf17'] = 1 * ('위험수당' in welfare)
+            item['cf18'] = 1 * ('연장근로수당' in welfare)
+
+            # 생활안정 지원
+            item['cf19'] = 1 * ('기숙사운영' in welfare)
+            item['cf20'] = 1 * ('명절 귀향비 지급' in welfare)
+
+            # 생활편의 지원
+            item['cf21'] = 1 * ('조식제공' in welfare)
+            item['cf22'] = 1 * ('중식제공' in welfare)
+            item['cf23'] = 1 * ('석식제공' in welfare)
+            item['cf24'] = 1 * ('근무복 지급' in welfare)
+            item['cf25'] = 1 * ('통근버스 운행' in welfare)
+            item['cf26'] = 1 * ('야간교통비 지급' in welfare)
+            item['cf27'] = 1 * ('차량유류보조금' in welfare)
+            item['cf28'] = 1 * ('주차비지원' in welfare)
+            item['cf29'] = 1 * ('주차가능' in welfare)
+
+            # 경조사 지원
+            item['cf30'] = 1 * ('경조휴가제' in welfare)
+            item['cf31'] = 1 * ('각종 경조금' in welfare)
+
+        except:
+            pass
+
+        # d.업직종 --------------------------------------------------------
 
         try:
             jobtype = table_recruit.loc['업직종',1]
@@ -459,111 +560,5 @@ class MainSpider(scrapy.Spider):
 
         except:
             pass
-
-        try:
-            emptype = table_recruit.loc['고용형태',1]
-            item['ce00'] = 1 * ('알바' in emptype)
-            item['ce01'] = 1 * ('정규직' in emptype)
-            item['ce02'] = 1 * ('계약직' in emptype)
-            item['ce03'] = 1 * ('파견직' in emptype)
-            item['ce04'] = 1 * ('청년인턴직' in emptype)
-            item['ce05'] = 1 * ('위촉직' in emptype)
-            item['ce06'] = 1 * ('연수생/교육생' in emptype)
-        except:
-            pass
-
-        try:
-            welfare = table_recruit.loc['복리후생',1]
-            # 보험 (wf_isr)
-            item['cf00'] = 1 * ('국민연금' in welfare)
-            item['cf01'] = 1 * ('고용보험' in welfare)
-            item['cf02'] = 1 * ('산재보험' in welfare)
-            item['cf03'] = 1 * ('건강보험' in welfare)
-
-            # 휴가, 휴무
-            item['cf04'] = 1 * ('정기휴가' in welfare)
-            item['cf05'] = 1 * ('연차' in welfare)
-            item['cf06'] = 1 * ('월차' in welfare)
-
-            # 보상제도
-            item['cf07'] = 1 * ('인센티브제' in welfare)
-            item['cf08'] = 1 * ('정기보너스' in welfare)
-            item['cf09'] = 1 * ('퇴직금' in welfare)
-            item['cf10'] = 1 * ('퇴직연금' in welfare)
-            item['cf11'] = 1 * ('우수사원 표창/포상' in welfare)
-            item['cf12'] = 1 * ('장기근속자 포상' in welfare)
-
-            # 수당제도
-            item['cf13'] = 1 * ('야간근로수당' in welfare)
-            item['cf14'] = 1 * ('휴일근로수당' in welfare)
-            item['cf15'] = 1 * ('연월차수당' in welfare)
-            item['cf16'] = 1 * ('장기근속수당' in welfare)
-            item['cf17'] = 1 * ('위험수당' in welfare)
-            item['cf18'] = 1 * ('연장근로수당' in welfare)
-
-            # 생활안정 지원
-            item['cf19'] = 1 * ('기숙사운영' in welfare)
-            item['cf20'] = 1 * ('명절 귀향비 지급' in welfare)
-
-            # 생활편의 지원
-            item['cf21'] = 1 * ('조식제공' in welfare)
-            item['cf22'] = 1 * ('중식제공' in welfare)
-            item['cf23'] = 1 * ('석식제공' in welfare)
-            item['cf24'] = 1 * ('근무복 지급' in welfare)
-            item['cf25'] = 1 * ('통근버스 운행' in welfare)
-            item['cf26'] = 1 * ('야간교통비 지급' in welfare)
-            item['cf27'] = 1 * ('차량유류보조금' in welfare)
-            item['cf28'] = 1 * ('주차비지원' in welfare)
-            item['cf29'] = 1 * ('주차가능' in welfare)
-
-            # 경조사 지원
-            item['cf30'] = 1 * ('경조휴가제' in welfare)
-            item['cf31'] = 1 * ('각종 경조금' in welfare)
-
-        except:
-            pass
-
-        # 근무장소 세부사항
-        css_workarea = css_main + "div.viweTab > div.tabItem_workArea > div.workAddr > span::text"
-        item['ab01'] = response.css(css_workarea).get()
-
-        # 채용 기업 정보 (기본 정보)
-        css_firminfo = "#section_cropInfo > div.companyInfo.clearfix > div.infoList > "
-        # 관심 수
-        css_interest = css_firminfo + "div.title > button > span > em::text"
-        item['aa04'] = response.css(css_interest).get().replace(',','')
-
-        # 4대 보험 하려고 했는데, requests로 크롤이 안 됨. 중요한 정보로 판단되면 selenium 써야할 듯
-        # css_insurance = css_firminfo + "div.infoList > div.insuranceWrap"
-        # soup.select(css_insurance)
-
-        css_col = css_firminfo + "div.listItem > span.dataRow::text"
-        col = response.css(css_col).extract()
-        css_firmitem = css_firminfo + "div.listItem > span.data::text"
-        firmitem = response.css(css_firmitem).extract()
-        df_firm = DataFrame({c:[i] for c,i in zip(col, firmitem)})
-
-        try:
-            employer = df_firm.loc[0,'대표자'].replace("\r\n","").replace(" ", "")
-        except:
-            employer = None
-        try:
-            address = df_firm.loc[0,'회사주소']
-        except:
-            address = None
-        try:
-            business = df_firm.loc[0,'사업내용']
-        except:
-            business = None
-        try:
-            css_homepage = css_firminfo + "div.listItem > span.data > a::attr(href)"
-            homepage = response.css(css_homepage).get()
-        except:
-            homepage = None
-
-        item['ac01'] = employer
-        item['ac02'] = business
-        item['ac03'] = homepage
-        item['ac05'] = address
 
         yield item
